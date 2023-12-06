@@ -1,0 +1,9 @@
+build/
+
+*.mp4
+
+cmake-build-debug/
+
+cmake-build-release/
+
+.idea/
