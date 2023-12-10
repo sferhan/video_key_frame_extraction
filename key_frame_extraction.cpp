@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <set>
 #include <omp.h>
+#include <mpi.h>
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -21,6 +22,7 @@ struct VideoContext {
     int video_stream_index;
 };
 
+
 int64_t FrameToPts(AVStream* pavStream, int64_t frame)
 {
     return (int64_t(frame) * pavStream->r_frame_rate.den *  pavStream->time_base.den) /
@@ -28,14 +30,24 @@ int64_t FrameToPts(AVStream* pavStream, int64_t frame)
             pavStream->time_base.num);
 }
 
-void print_vector(std::set<int64_t>& v) {
+void print_vector(std::vector<int>& v) {
+    for(int i: v) {
+        std::cout<<i<<", ";
+    }
+    std::cout<<std::endl;
+}
+
+void print_set(std::set<int64_t>& v) {
     for(int64_t i: v) {
         std::cout<<i<<", ";
     }
     std::cout<<std::endl;
 }
 
+
 VideoContext get_codec_context_for_video_file(const string& input_filename) {
+    std::chrono::time_point<std::chrono::high_resolution_clock> start_time = std::chrono::high_resolution_clock::now();
+
     AVFormatContext* format_ctx = NULL;
 
     if (avformat_open_input(&format_ctx, input_filename.c_str(), nullptr, nullptr) < 0) {
@@ -85,7 +97,11 @@ VideoContext get_codec_context_for_video_file(const string& input_filename) {
     return ctx;
 }
 
+
 void process_video_naive(const std::string& input_filename) {
+    cout<<endl<<"Starting Naive approach"<<endl;
+    std::chrono::time_point<std::chrono::high_resolution_clock> start_time = std::chrono::high_resolution_clock::now();
+
     VideoContext v_ctx = get_codec_context_for_video_file(input_filename);
     AVFormatContext* format_ctx = v_ctx.format_ctx;
     AVCodecContext * codec_ctx = v_ctx.codec_ctx;
@@ -111,171 +127,33 @@ void process_video_naive(const std::string& input_filename) {
         av_packet_unref(packet);
     }
 
+    std::chrono::time_point<std::chrono::high_resolution_clock> end_time = std::chrono::high_resolution_clock::now();
+
     std::cout << "Total Frames: " << total_frames<<std::endl;
-    std::cout << "Total Frames Requests: " << ct<<std::endl;
     std::cout << "Key Frames " << key_frame_numbers.size() << std::endl;
-    std::cout << "Key Frame Indices: ";
-    print_vector(key_frame_numbers);
+//    std::cout << "Key Frame Indices: ";
+//    print_set(key_frame_numbers);
 
     avcodec_free_context(&codec_ctx);
     avformat_close_input(&format_ctx);
+
+    std::chrono::duration<double> elapsed = end_time - start_time;
+    std::cout << " Elapsed time with Naive approach is : " << elapsed.count() << " " << std::endl;
 }
 
-void process_video(const std::string& input_filename) {
-    VideoContext v_ctx = get_codec_context_for_video_file(input_filename);
-    AVFormatContext* format_ctx = v_ctx.format_ctx;
-    AVCodecContext * codec_ctx = v_ctx.codec_ctx;
-    int video_stream_index = v_ctx.video_stream_index;
 
-    // Divide the video into 4 parts
-    int64_t total_frames = format_ctx->streams[video_stream_index]->nb_frames;
-    int64_t frames_per_part = total_frames / 4;
-    int64_t total_key_frames = 0;
-    std::set<int64_t> key_frame_numbers;
+void process_video_omp(const std::string& input_filename, int parallelism) {
+    const int SEGMENTS = parallelism;
 
-    for (int part = 0; part < 4; ++part) {
-        // Seek to the start of the part
-        int64_t start_frame = part * frames_per_part;
-        int64_t curr_frame = start_frame;
+    cout<<endl<<"Starting OMP-"<<SEGMENTS<<endl;
+    std::chrono::time_point<std::chrono::high_resolution_clock> start_time = std::chrono::high_resolution_clock::now();
 
-        int64_t tmp_stmp = FrameToPts(format_ctx->streams[video_stream_index], start_frame);
-        if(av_seek_frame(format_ctx, video_stream_index, tmp_stmp, 0) < 0) {
-            std::cerr << "Error seeking to frame : " << start_frame <<std::endl;
-        }
-
-        // Process frames in the part
-        int64_t end_frame = (part == 3) ? total_frames : ((part + 1) * frames_per_part - 1);
-        int64_t i_frame_count = 0;
-
-        AVPacket* packet = av_packet_alloc();
-
-        while (av_read_frame(format_ctx, packet) >= 0 && curr_frame <= end_frame) {
-            if (packet->stream_index == video_stream_index) {
-                AVFrame* frame = av_frame_alloc();
-                if (!frame) {
-                    std::cerr << "Error allocating frame." << std::endl;
-                    break;
-                }
-
-                int ret = EAGAIN;
-                while(abs(ret) == EAGAIN) {
-                    avcodec_send_packet(codec_ctx, packet);
-                    ret = avcodec_receive_frame(codec_ctx, frame);
-                }
-
-                if(ret < 0 ) {
-                    std::cerr << "Error decoding frame." << std::endl;
-                }
-                else {
-                    curr_frame += 1;
-                    if (frame->pict_type == AV_PICTURE_TYPE_I) {
-                        // Count I-frames
-                        ++i_frame_count;
-                        key_frame_numbers.insert(frame->pts);
-                    }
-                }
-
-                av_frame_free(&frame);
-            }
-
-            av_packet_unref(packet);
-        }
-        total_key_frames += i_frame_count;
-    }
-
-    std::cout << "Total Frames: " << total_frames<<std::endl;
-    std::cout << "Key Frames " << key_frame_numbers.size() << std::endl;
-    std::cout << "Key Frame Indices: ";
-    print_vector(key_frame_numbers);
-
-    avcodec_free_context(&codec_ctx);
-    avformat_close_input(&format_ctx);
-}
-
-void process_video_omp(const std::string& input_filename) {
-    VideoContext _v_ctx = get_codec_context_for_video_file(input_filename);
-    int video_stream_index = _v_ctx.video_stream_index;
-
-    // Divide the video into segments
-    int64_t total_frames = _v_ctx.format_ctx->streams[video_stream_index]->nb_frames;
-    int64_t frames_per_part = total_frames / 4;
-    int64_t total_key_frames = 0;
-    std::set<int64_t> key_frame_numbers;
-
-    # pragma omp parallel for reduction(+:total_key_frames)
-    for (int part = 0; part < 4; ++part) {
-        VideoContext v_ctx = get_codec_context_for_video_file(input_filename);
-        AVFormatContext* format_ctx = v_ctx.format_ctx;
-        AVCodecContext * codec_ctx = v_ctx.codec_ctx;
-        // Seek to the start of the part
-        int64_t start_frame = part * frames_per_part;
-        int64_t curr_frame = start_frame;
-
-        int64_t tmp_stmp = FrameToPts(format_ctx->streams[video_stream_index], start_frame);
-        if(av_seek_frame(format_ctx, video_stream_index, tmp_stmp, 0) < 0) {
-            std::cerr << "Error seeking to frame : " << start_frame <<std::endl;
-        }
-
-        // Process frames in the part
-        int64_t end_frame = (part == 3) ? total_frames : ((part + 1) * frames_per_part - 1);
-        int64_t i_frame_count = 0;
-
-        AVPacket* packet = av_packet_alloc();
-
-        while (av_read_frame(format_ctx, packet) >= 0 && curr_frame <= end_frame) {
-            if (packet->stream_index == video_stream_index) {
-                AVFrame* frame = av_frame_alloc();
-                if (!frame) {
-                    std::cerr << "Error allocating frame." << std::endl;
-                    break;
-                }
-
-                int ret = EAGAIN;
-                while(abs(ret) == EAGAIN) {
-                    avcodec_send_packet(codec_ctx, packet);
-                    ret = avcodec_receive_frame(codec_ctx, frame);
-                }
-
-                if(ret < 0 ) {
-                    std::cerr << "Error decoding frame." << std::endl;
-                }
-                else {
-                    curr_frame += 1;
-                    if (frame->pict_type == AV_PICTURE_TYPE_I) {
-                        // Count I-frames
-                        ++i_frame_count;
-                        key_frame_numbers.insert(frame->pts);
-                    }
-                }
-
-                av_frame_free(&frame);
-            }
-
-            av_packet_unref(packet);
-        }
-        total_key_frames += i_frame_count;
-
-        avcodec_free_context(&v_ctx.codec_ctx);
-        avformat_close_input(&v_ctx.format_ctx);
-    }
-
-    std::cout << "Total Frames: " << total_frames<<std::endl;
-    std::cout << "Key Frames " << key_frame_numbers.size() << std::endl;
-    std::cout << "Key Frame Indices: ";
-    print_vector(key_frame_numbers);
-
-    avcodec_free_context(&_v_ctx.codec_ctx);
-    avformat_close_input(&_v_ctx.format_ctx);
-}
-
-void process_video_omp1(const std::string& input_filename) {
     VideoContext _v_ctx = get_codec_context_for_video_file(input_filename);
     int video_stream_index = _v_ctx.video_stream_index;
 
     // /Users/farhan/Desktop/workspaces/study/ms/semester3/ms_project/scanner/datasets/large_videos/huge_5gb_video.mp4
 
     // Divide the video into segments
-    const int SEGMENTS = 64;
     int64_t total_duration = _v_ctx.format_ctx->streams[video_stream_index]->duration;
     int64_t duration_per_part = total_duration / SEGMENTS;
     int64_t frames_per_part = _v_ctx.format_ctx->streams[video_stream_index]->nb_frames / SEGMENTS;
@@ -323,185 +201,202 @@ void process_video_omp1(const std::string& input_filename) {
         }
     }
 
-    std::cout << "Total Frames: " << _v_ctx.format_ctx->streams[video_stream_index]->nb_frames<<std::endl;
-    std::cout << "Key Frames " << key_frame_numbers.size() << std::endl;
-    std::cout << "Key Frame Indices: ";
-    print_vector(key_frame_numbers);
+    std::chrono::time_point<std::chrono::high_resolution_clock> end_time = std::chrono::high_resolution_clock::now();
+    std::cout << " Total Frames: " << _v_ctx.format_ctx->streams[video_stream_index]->nb_frames<<std::endl;
+    std::cout << " Key Frames " << key_frame_numbers.size() << std::endl;
+//    std::cout << "Key Frame Indices: ";
+//    print_set(key_frame_numbers);
 
     avcodec_free_context(&_v_ctx.codec_ctx);
     avformat_close_input(&_v_ctx.format_ctx);
+
+    std::chrono::duration<double> elapsed = end_time - start_time;
+    std::cout << " Elapsed time for OMP Shared Parallel with "<<SEGMENTS<<"-way parallelism is : " << elapsed.count() << " " << std::endl;
 }
 
-void process_video_opt(const std::string& input_filename) {
 
-    AVFormatContext* format_ctx = NULL;
+void process_video_distributed(int argc, char** argv) {
 
-    if (avformat_open_input(&format_ctx, input_filename.c_str(), nullptr, nullptr) < 0) {
-        std::cerr << "Error opening input file." << std::endl;
-        return;
+    std::chrono::time_point<std::chrono::high_resolution_clock> start_time = std::chrono::high_resolution_clock::now();
+    MPI_Init(&argc, &argv);
+
+    int rank, size, nranks;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    MPI_Comm_size( MPI_COMM_WORLD, &nranks);
+
+    if(rank == 0) {
+        cout<<endl<<"Starting Distributed MPI"<<endl;
     }
 
-    if (avformat_find_stream_info(format_ctx, NULL) < 0) {
-        std::cerr << "Error finding stream information." << std::endl;
-        return;
+    vector<int> key_frame_count_for_rank;
+    key_frame_count_for_rank.resize(nranks);
+
+    char* input_filename = argv[1];
+    VideoContext v_ctx = get_codec_context_for_video_file(input_filename);
+    int video_stream_index = v_ctx.video_stream_index;
+    AVFormatContext* format_ctx = v_ctx.format_ctx;
+
+    int64_t total_duration = v_ctx.format_ctx->streams[video_stream_index]->duration;
+    int64_t  total_frames = v_ctx.format_ctx->streams[video_stream_index]->nb_frames;
+    int64_t duration_per_part = total_duration / nranks;
+    int64_t frames_per_part = total_frames / nranks;
+    int64_t total_key_frames = 0;
+    int64_t segment_start_time = rank * duration_per_part;
+    std::set<int64_t> key_frame_numbers;
+
+    if(av_seek_frame(format_ctx, video_stream_index, segment_start_time, AVSEEK_FLAG_BACKWARD) < 0) {
+        std::cerr << "Error seeking to time : " << segment_start_time <<std::endl;
     }
 
-    const AVCodec* codec = nullptr;
-    int video_stream_index = -1;
+    AVPacket* packet = av_packet_alloc();
+    int frames_processed = 0;
+    vector<int64_t> local_key_frame_numbers;
 
-    for (unsigned int i = 0; i < format_ctx->nb_streams; ++i) {
-        if (format_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-            video_stream_index = i;
-            codec = avcodec_find_decoder(format_ctx->streams[i]->codecpar->codec_id);
-            if (!codec) {
-                std::cerr << "Error finding codec." << std::endl;
-                return;
+    while (av_read_frame(format_ctx, packet) >= 0) {
+        if (packet->stream_index == video_stream_index) {
+            if(frames_processed > frames_per_part) {
+                av_packet_unref(packet);
+                break;
             }
-            break;
+
+            if (packet->flags & AV_PKT_FLAG_KEY) {
+                local_key_frame_numbers.push_back(packet->pts);
+            }
+            frames_processed += 1;
         }
+        av_packet_unref(packet);
+    }
+    avcodec_free_context(&v_ctx.codec_ctx);
+    avformat_close_input(&v_ctx.format_ctx);
+
+
+    // all processes must complete there work before we start collecting the results
+    std::flush(std::cout);
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    int local_key_frame_count = local_key_frame_numbers.size();
+
+    // Gather the count of key frames from each process
+    std::flush(std::cout);
+    MPI_Barrier(MPI_COMM_WORLD);
+    MPI_Gather(&local_key_frame_count, 1, MPI_INT, key_frame_count_for_rank.data(), 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+    vector<int64_t > key_frames;
+
+    if (rank == 0) {
+        for (int i = 0; i < nranks; ++i) {
+            total_key_frames += key_frame_count_for_rank[i];
+        }
+        key_frames.resize(total_key_frames);
+
     }
 
-    AVCodecContext* codec_ctx = avcodec_alloc_context3(codec);
-    if (!codec_ctx) {
-        std::cerr << "Error allocating codec context." << std::endl;
-        return;
+    // Calculate displacements for variable-sized data
+    std::vector<int> displacements(size, 0);
+    for (int i = 1; i < size; ++i) {
+        displacements[i] = displacements[i - 1] + key_frame_count_for_rank[i - 1];
     }
 
-    if (avcodec_parameters_to_context(codec_ctx, format_ctx->streams[video_stream_index]->codecpar) < 0) {
-        std::cerr << "Error setting codec parameters." << std::endl;
-        return;
+    MPI_Barrier(MPI_COMM_WORLD);
+    // Gather the modified vectors back to the master
+    MPI_Gatherv(local_key_frame_numbers.data(), local_key_frame_numbers.size(), MPI_LONG_LONG, key_frames.data(), key_frame_count_for_rank.data(), displacements.data(), MPI_LONG_LONG, 0, MPI_COMM_WORLD);
+
+    std::chrono::time_point<std::chrono::high_resolution_clock> end_time = std::chrono::high_resolution_clock::now();
+
+    // The master combines the received vectors into a single set
+    if (rank == 0) {
+        std::set<int64_t> final_key_frame_numbers(key_frames.begin(), key_frames.end());
+        std::cout << " Total Frames: " << total_frames <<std::endl;
+        std::cout << " Key Frames " << final_key_frame_numbers.size() << std::endl;
+//        std::cout << "Key Frame Indices: ";
+//        print_set(final_key_frame_numbers);
+        std::chrono::time_point<std::chrono::high_resolution_clock> end_time = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> elapsed = end_time - start_time;
+        std::cout << " Elapsed time for Distributed MPI is : " << elapsed.count() << " " << std::endl;
     }
 
-    if (avcodec_open2(codec_ctx, codec, nullptr) < 0) {
-        std::cerr << "Error opening codec." << std::endl;
-        return;
-    }
+    avcodec_free_context(&v_ctx.codec_ctx);
+    avformat_close_input(&v_ctx.format_ctx);
 
-    // assuming there will be at least 1 key frame
-    int total_key_frames = 1;
-    int64_t last_key_frame_time = 0;
-
-    while(true) {
-        // seek to the next key frame
-        if(av_seek_frame(format_ctx, -1, 170, 0) < 0) {
-            std::cerr << "Error seeking to frame : " << last_key_frame_time <<std::endl;
-            break;
-        }
-
-        AVPacket* packet = av_packet_alloc();
-
-        av_read_frame(format_ctx, packet);
-        AVFrame* frame = av_frame_alloc();
-        int ret = EAGAIN;
-        while(abs(ret) == EAGAIN) {
-            avcodec_send_packet(codec_ctx, packet);
-            ret = avcodec_receive_frame(codec_ctx, frame);
-        }
-        if(ret < 0 ) {
-            std::cerr << "Error decoding frame." << std::endl;
-            break;
-        }
-        else if(frame->key_frame) {
-            total_key_frames += 1;
-            last_key_frame_time = frame->pts;
-        }
-    }
-
-
-    // Divide the video into 4 parts
-    int64_t total_frames = format_ctx->streams[video_stream_index]->nb_frames;
-
-    std::cout << "Total Frames: " << total_frames<<std::endl;
-    std::cout << "Key Frames " << total_key_frames << std::endl;
-
-    avcodec_free_context(&codec_ctx);
-    avformat_close_input(&format_ctx);
+    MPI_Finalize();
 }
 
-void process_video_distributed(const std::string& input_filename) {
 
-    AVFormatContext* format_ctx = NULL;
+void process_video_omp_gpu(const std::string& input_filename, int parallelism) {
+    const int SEGMENTS = 100;
 
-    if (avformat_open_input(&format_ctx, input_filename.c_str(), nullptr, nullptr) < 0) {
-        std::cerr << "Error opening input file." << std::endl;
-        return;
-    }
+    cout<<endl<<"Starting OMP GPU OFFLOAD"<<endl;
+    std::chrono::time_point<std::chrono::high_resolution_clock> start_time = std::chrono::high_resolution_clock::now();
 
-    if (avformat_find_stream_info(format_ctx, NULL) < 0) {
-        std::cerr << "Error finding stream information." << std::endl;
-        return;
-    }
+    VideoContext _v_ctx = get_codec_context_for_video_file(input_filename);
+    int video_stream_index = _v_ctx.video_stream_index;
 
-    const AVCodec* codec = nullptr;
-    int video_stream_index = -1;
+    // /Users/farhan/Desktop/workspaces/study/ms/semester3/ms_project/scanner/datasets/large_videos/huge_5gb_video.mp4
 
-    for (unsigned int i = 0; i < format_ctx->nb_streams; ++i) {
-        if (format_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-            video_stream_index = i;
-            codec = avcodec_find_decoder(format_ctx->streams[i]->codecpar->codec_id);
-            if (!codec) {
-                std::cerr << "Error finding codec." << std::endl;
-                return;
-            }
-            break;
+    // Divide the video into segments
+    int64_t total_duration = _v_ctx.format_ctx->streams[video_stream_index]->duration;
+    int64_t duration_per_part = total_duration / SEGMENTS;
+    int64_t frames_per_part = _v_ctx.format_ctx->streams[video_stream_index]->nb_frames / SEGMENTS;
+    std::set<int64_t> key_frame_numbers;
+
+    # pragma omp target teams distribute parallel for map(to: frames_per_part) map(tofrom: key_frame_numbers) map(to: input_filename)
+    for (int part = 0; part < SEGMENTS; ++part) {
+        VideoContext v_ctx = get_codec_context_for_video_file(input_filename);
+        int video_stream = _v_ctx.video_stream_index;
+        AVFormatContext* format_ctx = v_ctx.format_ctx;
+
+        // Seek to the start of the part
+        int64_t segment_start_time = part * duration_per_part;
+        int64_t end_time = (part == SEGMENTS-1) ? total_duration : ((part + 1) * duration_per_part - 1);
+
+        if(av_seek_frame(format_ctx, video_stream, segment_start_time, AVSEEK_FLAG_BACKWARD) < 0) {
+            std::cerr << "Error seeking to time : " << segment_start_time <<std::endl;
         }
-    }
 
-    AVCodecContext* codec_ctx = avcodec_alloc_context3(codec);
-    if (!codec_ctx) {
-        std::cerr << "Error allocating codec context." << std::endl;
-        return;
-    }
-
-    if (avcodec_parameters_to_context(codec_ctx, format_ctx->streams[video_stream_index]->codecpar) < 0) {
-        std::cerr << "Error setting codec parameters." << std::endl;
-        return;
-    }
-
-    if (avcodec_open2(codec_ctx, codec, nullptr) < 0) {
-        std::cerr << "Error opening codec." << std::endl;
-        return;
-    }
-
-    // assuming there will be at least 1 key frame
-    int total_key_frames = 1;
-    int64_t last_key_frame_time = 0;
-
-    while(true) {
-        // seek to the next key frame
-        if(av_seek_frame(format_ctx, -1, 170, 0) < 0) {
-            std::cerr << "Error seeking to frame : " << last_key_frame_time <<std::endl;
-            break;
-        }
+        int64_t i_frame_count = 0;
 
         AVPacket* packet = av_packet_alloc();
+        int frames_processed = 0;
 
-        av_read_frame(format_ctx, packet);
-        AVFrame* frame = av_frame_alloc();
-        int ret = EAGAIN;
-        while(abs(ret) == EAGAIN) {
-            avcodec_send_packet(codec_ctx, packet);
-            ret = avcodec_receive_frame(codec_ctx, frame);
+        while (av_read_frame(format_ctx, packet) >= 0) {
+            if (packet->stream_index == video_stream) {
+                if(frames_processed > frames_per_part) {
+                    av_packet_unref(packet);
+                    break;
+                }
+
+                if (packet->flags & AV_PKT_FLAG_KEY) {
+                    i_frame_count++;
+
+                    #pragma omp critical
+                    key_frame_numbers.insert(packet->pts);
+                }
+                frames_processed += 1;
+            }
+            av_packet_unref(packet);
         }
-        if(ret < 0 ) {
-            std::cerr << "Error decoding frame." << std::endl;
-            break;
-        }
-        else if(frame->key_frame) {
-            total_key_frames += 1;
-            last_key_frame_time = frame->pts;
-        }
+        avcodec_free_context(&v_ctx.codec_ctx);
+        avformat_close_input(&v_ctx.format_ctx);
     }
 
+    // Access the modified vector back on the host
+    #pragma omp target update from(key_frame_numbers)
 
-    // Divide the video into 4 parts
-    int64_t total_frames = format_ctx->streams[video_stream_index]->nb_frames;
+    // Unmap the vector from GPU device memory
+    #pragma omp target exit data map(release: key_frame_numbers)
 
-    std::cout << "Total Frames: " << total_frames<<std::endl;
-    std::cout << "Key Frames " << total_key_frames << std::endl;
+    std::chrono::time_point<std::chrono::high_resolution_clock> end_time = std::chrono::high_resolution_clock::now();
+    std::cout << " Total Frames: " << _v_ctx.format_ctx->streams[video_stream_index]->nb_frames<<std::endl;
+    std::cout << " Key Frames " << key_frame_numbers.size() << std::endl;
+//    std::cout << "Key Frame Indices: ";
+//    print_set(key_frame_numbers);
 
-    avcodec_free_context(&codec_ctx);
-    avformat_close_input(&format_ctx);
+    avcodec_free_context(&_v_ctx.codec_ctx);
+    avformat_close_input(&_v_ctx.format_ctx);
+
+    std::chrono::duration<double> elapsed = end_time - start_time;
+    std::cout << " Elapsed time for OMP GPU OFFLOAD with "<<SEGMENTS<<"-way parallelism is : " << elapsed.count() << " " << std::endl;
 }
 
 
@@ -513,16 +408,15 @@ int main(int argc, char* argv[]) {
 
     std::string input_filename = argv[1];
 
-    std::chrono::time_point<std::chrono::high_resolution_clock> start_time = std::chrono::high_resolution_clock::now();
-//    process_video_naive(input_filename);
-//    process_video(input_filename);
-//    process_video_omp(input_filename);
-    process_video_omp1(input_filename);
-//    process_video_opt(input_filename);
-
-    std::chrono::time_point<std::chrono::high_resolution_clock> end_time = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> elapsed = end_time - start_time;
-    std::cout << " Elapsed time is : " << elapsed.count() << " " << std::endl;
+    #if DISTRIBUTED_IMPL == 1
+        process_video_distributed(argc, argv);
+    #else
+        process_video_naive(input_filename);
+        process_video_omp(input_filename, 16);
+        process_video_omp(input_filename, 32);
+        process_video_omp(input_filename, 64);
+        process_video_omp_gpu(input_filename, 64);
+    #endif
 
     return 0;
 }
