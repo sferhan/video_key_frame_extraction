@@ -342,12 +342,15 @@ void process_video_omp_gpu(const std::string& input_filename, int parallelism) {
     int64_t frames_per_part = _v_ctx.format_ctx->streams[video_stream_index]->nb_frames / SEGMENTS;
     std::set<int64_t> key_frame_numbers;
 
-    int max_keyframes = 1000;
     int curr_key_frame_index = 0;
-    std::vector<int64_t> _key_frame_numbers(max_keyframes, 0);
-    int64_t* _key_frames = _key_frame_numbers.data();
+    int64_t target_key_frames[SEGMENTS][1000];
 
-    #pragma omp target data map(to: frames_per_part) map(tofrom: curr_key_frame_index) map(tofrom: filename)  map(tofrom: _key_frames[0:max_keyframes])
+    for(int i =0; i<SEGMENTS; i++) {
+        for(int j =0; j<1000; j++) {
+            target_key_frames[i][j] = -1;
+    }
+
+    #pragma omp target data map(to: frames_per_part) map(tofrom: curr_key_frame_index) map(tofrom: filename)  map(tofrom: target_key_frames[0:SEGMENTS][0:1000])
     {
         # pragma omp target teams distribute parallel for
         for (int part = 0; part < SEGMENTS; ++part) {
@@ -424,13 +427,8 @@ void process_video_omp_gpu(const std::string& input_filename, int parallelism) {
                     }
 
                     if (packet->flags & AV_PKT_FLAG_KEY) {
+                        target_key_frames[i_frame_count] = packet->pts;
                         i_frame_count++;
-
-                        #pragma omp critical
-                        {
-                            _key_frames[curr_key_frame_index] = packet->pts;
-                            curr_key_frame_index++;
-                        }
                     }
                     frames_processed += 1;
                 }
