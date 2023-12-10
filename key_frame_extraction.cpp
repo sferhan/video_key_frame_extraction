@@ -347,49 +347,51 @@ void process_video_omp_gpu(const std::string& input_filename, int parallelism) {
     std::vector<int64_t> _key_frame_numbers(max_keyframes, 0);
     int64_t* _key_frames = _key_frame_numbers.data();
 
-    # pragma omp target data teams distribute parallel for map(to: frames_per_part) map(tofrom: curr_key_frame_index) map(tofrom: filename)  map(tofrom: _key_frames[0:max_keyframes])
-    for (int part = 0; part < SEGMENTS; ++part) {
-        VideoContext v_ctx = get_codec_context_for_video_file(filename);
-        int video_stream = _v_ctx.video_stream_index;
-        AVFormatContext* format_ctx = v_ctx.format_ctx;
+    #pragma omp target data map(to: frames_per_part) map(tofrom: curr_key_frame_index) map(tofrom: filename)  map(tofrom: _key_frames[0:max_keyframes])
+    {
+        # pragma omp target teams distribute parallel for
+        for (int part = 0; part < SEGMENTS; ++part) {
+            VideoContext v_ctx = get_codec_context_for_video_file(filename);
+            int video_stream = _v_ctx.video_stream_index;
+            AVFormatContext* format_ctx = v_ctx.format_ctx;
 
-        // Seek to the start of the part
-        int64_t segment_start_time = part * duration_per_part;
-        int64_t end_time = (part == SEGMENTS-1) ? total_duration : ((part + 1) * duration_per_part - 1);
+            // Seek to the start of the part
+            int64_t segment_start_time = part * duration_per_part;
+            int64_t end_time = (part == SEGMENTS-1) ? total_duration : ((part + 1) * duration_per_part - 1);
 
-        if(av_seek_frame(format_ctx, video_stream, segment_start_time, AVSEEK_FLAG_BACKWARD) < 0) {
-            printf("Error seeking to time : %lld \n", segment_start_time);
-        }
-
-        int64_t i_frame_count = 0;
-
-        AVPacket* packet = av_packet_alloc();
-        int frames_processed = 0;
-
-        while (av_read_frame(format_ctx, packet) >= 0) {
-            if (packet->stream_index == video_stream) {
-                if(frames_processed > frames_per_part) {
-                    av_packet_unref(packet);
-                    break;
-                }
-
-                if (packet->flags & AV_PKT_FLAG_KEY) {
-                    i_frame_count++;
-
-                    #pragma omp critical
-                    {
-                        _key_frames[curr_key_frame_index] = packet->pts;
-                        curr_key_frame_index++;
-                    }
-                }
-                frames_processed += 1;
+            if(av_seek_frame(format_ctx, video_stream, segment_start_time, AVSEEK_FLAG_BACKWARD) < 0) {
+                printf("Error seeking to time : %lld \n", segment_start_time);
             }
-            av_packet_unref(packet);
-        }
-        avcodec_free_context(&v_ctx.codec_ctx);
-        avformat_close_input(&v_ctx.format_ctx);
-    }
 
+            int64_t i_frame_count = 0;
+
+            AVPacket* packet = av_packet_alloc();
+            int frames_processed = 0;
+
+            while (av_read_frame(format_ctx, packet) >= 0) {
+                if (packet->stream_index == video_stream) {
+                    if(frames_processed > frames_per_part) {
+                        av_packet_unref(packet);
+                        break;
+                    }
+
+                    if (packet->flags & AV_PKT_FLAG_KEY) {
+                        i_frame_count++;
+
+                        #pragma omp critical
+                        {
+                            _key_frames[curr_key_frame_index] = packet->pts;
+                            curr_key_frame_index++;
+                        }
+                    }
+                    frames_processed += 1;
+                }
+                av_packet_unref(packet);
+            }
+            avcodec_free_context(&v_ctx.codec_ctx);
+            avformat_close_input(&v_ctx.format_ctx);
+        }
+    }
     // Access the modified vector back on the host
     #pragma omp target update from(_key_frames)
 
