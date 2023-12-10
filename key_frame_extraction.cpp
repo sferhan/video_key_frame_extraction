@@ -348,6 +348,7 @@ void process_video_omp_gpu(const std::string& input_filename, int parallelism) {
     for(int i =0; i<SEGMENTS; i++) {
         for(int j =0; j<1000; j++) {
             target_key_frames[i][j] = -1;
+        }
     }
 
     #pragma omp target data map(to: frames_per_part) map(tofrom: curr_key_frame_index) map(tofrom: filename)  map(tofrom: target_key_frames[0:SEGMENTS][0:1000])
