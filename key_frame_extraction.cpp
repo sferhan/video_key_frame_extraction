@@ -351,7 +351,56 @@ void process_video_omp_gpu(const std::string& input_filename, int parallelism) {
     {
         # pragma omp target teams distribute parallel for
         for (int part = 0; part < SEGMENTS; ++part) {
-            VideoContext v_ctx = get_codec_context_for_video_file(filename);
+            std::chrono::time_point<std::chrono::high_resolution_clock> start_time = std::chrono::high_resolution_clock::now();
+
+            AVFormatContext* format_ctx = NULL;
+
+            if (avformat_open_input(&format_ctx, input_filename.c_str(), nullptr, nullptr) < 0) {
+                printf("Error opening input file.\n");
+                exit(1);
+            }
+
+            if (avformat_find_stream_info(format_ctx, NULL) < 0) {
+                printf("Error finding stream information.\n");
+                exit(1);
+            }
+
+            const AVCodec* codec = nullptr;
+            int video_stream_index = -1;
+
+            for (unsigned int i = 0; i < format_ctx->nb_streams; ++i) {
+                if (format_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+                    video_stream_index = i;
+                    codec = avcodec_find_decoder(format_ctx->streams[i]->codecpar->codec_id);
+                    if (!codec) {
+                        printf("Error finding codec \n");
+                        exit(1);
+                    }
+                    break;
+                }
+            }
+            AVCodecContext * codec_ctx = avcodec_alloc_context3(codec);
+            if (!codec_ctx) {
+                printf("Error allocating codec context.\n");
+                exit(1);
+            }
+
+            if (avcodec_parameters_to_context(codec_ctx, format_ctx->streams[video_stream_index]->codecpar) < 0) {
+                printf("Error setting codec parameters.\n");
+                exit(1);
+            }
+
+            if (avcodec_open2(codec_ctx, codec_ctx->codec, nullptr) < 0) {
+                printf("Error opening codec.");
+                exit(1);
+            }
+
+            VideoContext ctx{};
+            ctx.codec_ctx = codec_ctx;
+            ctx.format_ctx = format_ctx;
+            ctx.video_stream_index = video_stream_index;
+            VideoContext v_ctx = ctx;
+
             int video_stream = _v_ctx.video_stream_index;
             AVFormatContext* format_ctx = v_ctx.format_ctx;
 
