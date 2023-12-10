@@ -427,7 +427,7 @@ void process_video_omp_gpu(const std::string& input_filename, int parallelism) {
                     }
 
                     if (packet->flags & AV_PKT_FLAG_KEY) {
-                        target_key_frames[i_frame_count] = packet->pts;
+                        target_key_frames[part][i_frame_count] = packet->pts;
                         i_frame_count++;
                     }
                     frames_processed += 1;
@@ -438,11 +438,6 @@ void process_video_omp_gpu(const std::string& input_filename, int parallelism) {
             avformat_close_input(&v_ctx.format_ctx);
         }
     }
-    // Access the modified vector back on the host
-    #pragma omp target update from(_key_frames)
-
-    // Unmap the vector from GPU device memory
-    #pragma omp target exit data map(release: _key_frames)
 
     std::chrono::time_point<std::chrono::high_resolution_clock> end_time = std::chrono::high_resolution_clock::now();
     std::cout << " Total Frames: " << _v_ctx.format_ctx->streams[video_stream_index]->nb_frames<<std::endl;
