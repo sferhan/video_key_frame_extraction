@@ -52,12 +52,12 @@ VideoContext get_codec_context_for_video_file(const string& input_filename) {
     AVFormatContext* format_ctx = NULL;
 
     if (avformat_open_input(&format_ctx, input_filename.c_str(), nullptr, nullptr) < 0) {
-        std::cout << "Error opening input file." << std::endl;
+        printf("Error opening input file.\n");
         exit(1);
     }
 
     if (avformat_find_stream_info(format_ctx, NULL) < 0) {
-        std::cout << "Error finding stream information." << std::endl;
+        printf("Error finding stream information.\n");
         exit(1);
     }
 
@@ -69,7 +69,7 @@ VideoContext get_codec_context_for_video_file(const string& input_filename) {
             video_stream_index = i;
             codec = avcodec_find_decoder(format_ctx->streams[i]->codecpar->codec_id);
             if (!codec) {
-                std::cerr << "Error finding codec." << std::endl;
+                printf("Error finding codec \n");
                 exit(1);
             }
             break;
@@ -77,17 +77,17 @@ VideoContext get_codec_context_for_video_file(const string& input_filename) {
     }
     AVCodecContext * codec_ctx = avcodec_alloc_context3(codec);
     if (!codec_ctx) {
-        std::cerr << "Error allocating codec context." << std::endl;
+        printf("Error allocating codec context.\n");
         exit(1);
     }
 
     if (avcodec_parameters_to_context(codec_ctx, format_ctx->streams[video_stream_index]->codecpar) < 0) {
-        std::cerr << "Error setting codec parameters." << std::endl;
+        printf("Error setting codec parameters.\n");
         exit(1);
     }
 
     if (avcodec_open2(codec_ctx, codec_ctx->codec, nullptr) < 0) {
-        std::cerr << "Error opening codec." << std::endl;
+        printf("Error opening codec.");
         exit(1);
     }
 
@@ -330,7 +330,8 @@ void process_video_omp_gpu(const std::string& input_filename, int parallelism) {
     cout<<endl<<"Starting OMP GPU OFFLOAD"<<endl;
     std::chrono::time_point<std::chrono::high_resolution_clock> start_time = std::chrono::high_resolution_clock::now();
 
-    VideoContext _v_ctx = get_codec_context_for_video_file(input_filename);
+    const char* filename = input_filename.data();
+    VideoContext _v_ctx = get_codec_context_for_video_file(filename);
     int video_stream_index = _v_ctx.video_stream_index;
 
     // /Users/farhan/Desktop/workspaces/study/ms/semester3/ms_project/scanner/datasets/large_videos/huge_5gb_video.mp4
@@ -346,9 +347,9 @@ void process_video_omp_gpu(const std::string& input_filename, int parallelism) {
     std::vector<int64_t> _key_frame_numbers(max_keyframes, 0);
     int64_t* _key_frames = _key_frame_numbers.data();
 
-    # pragma omp target teams distribute parallel for map(to: frames_per_part) map(tofrom: curr_key_frame_index) map(tofrom: _key_frames[0:max_keyframes]) map(to: input_filename)
+    # pragma omp target data teams distribute parallel for map(to: frames_per_part) map(tofrom: curr_key_frame_index) map(tofrom: filename)  map(tofrom: _key_frames[0:max_keyframes])
     for (int part = 0; part < SEGMENTS; ++part) {
-        VideoContext v_ctx = get_codec_context_for_video_file(input_filename);
+        VideoContext v_ctx = get_codec_context_for_video_file(filename);
         int video_stream = _v_ctx.video_stream_index;
         AVFormatContext* format_ctx = v_ctx.format_ctx;
 
