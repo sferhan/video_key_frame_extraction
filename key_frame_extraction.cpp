@@ -402,7 +402,6 @@ void process_video_omp_gpu(const std::string& input_filename, int parallelism) {
             VideoContext v_ctx = ctx;
 
             int video_stream = _v_ctx.video_stream_index;
-            AVFormatContext* format_ctx = v_ctx.format_ctx;
 
             // Seek to the start of the part
             int64_t segment_start_time = part * duration_per_part;
