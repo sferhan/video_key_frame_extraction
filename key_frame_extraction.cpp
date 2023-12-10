@@ -341,7 +341,12 @@ void process_video_omp_gpu(const std::string& input_filename, int parallelism) {
     int64_t frames_per_part = _v_ctx.format_ctx->streams[video_stream_index]->nb_frames / SEGMENTS;
     std::set<int64_t> key_frame_numbers;
 
-    # pragma omp target teams distribute parallel for map(to: frames_per_part) map(tofrom: key_frame_numbers) map(to: input_filename)
+    int max_keyframes = 1000;
+    int curr_key_frame_index = 0;
+    std::vector<int64_t> _key_frame_numbers(max_keyframes, 0);
+    int64_t* _key_frames = _key_frame_numbers.data();
+
+    # pragma omp target teams distribute parallel for map(to: frames_per_part) map(tofrom: curr_key_frame_index) map(tofrom: _key_frames[0:max_keyframes]) map(to: input_filename)
     for (int part = 0; part < SEGMENTS; ++part) {
         VideoContext v_ctx = get_codec_context_for_video_file(input_filename);
         int video_stream = _v_ctx.video_stream_index;
@@ -352,7 +357,7 @@ void process_video_omp_gpu(const std::string& input_filename, int parallelism) {
         int64_t end_time = (part == SEGMENTS-1) ? total_duration : ((part + 1) * duration_per_part - 1);
 
         if(av_seek_frame(format_ctx, video_stream, segment_start_time, AVSEEK_FLAG_BACKWARD) < 0) {
-            std::cout << "Error seeking to time : " << segment_start_time <<std::endl;
+            printf("Error seeking to time : %lld \n", segment_start_time);
         }
 
         int64_t i_frame_count = 0;
@@ -371,7 +376,10 @@ void process_video_omp_gpu(const std::string& input_filename, int parallelism) {
                     i_frame_count++;
 
                     #pragma omp critical
-                    key_frame_numbers.insert(packet->pts);
+                    {
+                        _key_frames[curr_key_frame_index] = packet->pts;
+                        curr_key_frame_index++;
+                    }
                 }
                 frames_processed += 1;
             }
@@ -382,10 +390,10 @@ void process_video_omp_gpu(const std::string& input_filename, int parallelism) {
     }
 
     // Access the modified vector back on the host
-    #pragma omp target update from(key_frame_numbers)
+    #pragma omp target update from(_key_frames)
 
     // Unmap the vector from GPU device memory
-    #pragma omp target exit data map(release: key_frame_numbers)
+    #pragma omp target exit data map(release: _key_frames)
 
     std::chrono::time_point<std::chrono::high_resolution_clock> end_time = std::chrono::high_resolution_clock::now();
     std::cout << " Total Frames: " << _v_ctx.format_ctx->streams[video_stream_index]->nb_frames<<std::endl;
