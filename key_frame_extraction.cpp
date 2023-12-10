@@ -6,6 +6,7 @@
 #include <set>
 #include <omp.h>
 #include <mpi.h>
+#include <vector>
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -51,12 +52,12 @@ VideoContext get_codec_context_for_video_file(const string& input_filename) {
     AVFormatContext* format_ctx = NULL;
 
     if (avformat_open_input(&format_ctx, input_filename.c_str(), nullptr, nullptr) < 0) {
-        std::cerr << "Error opening input file." << std::endl;
+        std::cout << "Error opening input file." << std::endl;
         exit(1);
     }
 
     if (avformat_find_stream_info(format_ctx, NULL) < 0) {
-        std::cerr << "Error finding stream information." << std::endl;
+        std::cout << "Error finding stream information." << std::endl;
         exit(1);
     }
 
@@ -172,7 +173,7 @@ void process_video_omp(const std::string& input_filename, int parallelism) {
             int64_t end_time = (part == SEGMENTS-1) ? total_duration : ((part + 1) * duration_per_part - 1);
 
             if(av_seek_frame(format_ctx, video_stream_index, segment_start_time, AVSEEK_FLAG_BACKWARD) < 0) {
-                std::cerr << "Error seeking to time : " << segment_start_time <<std::endl;
+                std::cout << "Error seeking to time : " << segment_start_time <<std::endl;
             }
 
             int64_t i_frame_count = 0;
@@ -246,7 +247,7 @@ void process_video_distributed(int argc, char** argv) {
     std::set<int64_t> key_frame_numbers;
 
     if(av_seek_frame(format_ctx, video_stream_index, segment_start_time, AVSEEK_FLAG_BACKWARD) < 0) {
-        std::cerr << "Error seeking to time : " << segment_start_time <<std::endl;
+        std::cout << "Error seeking to time : " << segment_start_time <<std::endl;
     }
 
     AVPacket* packet = av_packet_alloc();
@@ -351,7 +352,7 @@ void process_video_omp_gpu(const std::string& input_filename, int parallelism) {
         int64_t end_time = (part == SEGMENTS-1) ? total_duration : ((part + 1) * duration_per_part - 1);
 
         if(av_seek_frame(format_ctx, video_stream, segment_start_time, AVSEEK_FLAG_BACKWARD) < 0) {
-            std::cerr << "Error seeking to time : " << segment_start_time <<std::endl;
+            std::cout << "Error seeking to time : " << segment_start_time <<std::endl;
         }
 
         int64_t i_frame_count = 0;
@@ -402,7 +403,7 @@ void process_video_omp_gpu(const std::string& input_filename, int parallelism) {
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " input_file output_file1 output_file2 output_file3 output_file4" << std::endl;
+        std::cout << "Usage: " << argv[0] << " input_file output_file1 output_file2 output_file3 output_file4" << std::endl;
         return 1;
     }
 
