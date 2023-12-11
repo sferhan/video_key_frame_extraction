@@ -138,7 +138,7 @@ void process_video_naive(const std::string& input_filename) {
     avformat_close_input(&format_ctx);
 
     std::chrono::duration<double> elapsed = end_time - start_time;
-    std::cout << " Elapsed time with Naive approach is : " << elapsed.count() << " " << std::endl;
+    std::cout << " Elapsed time with Naive approach is : " << elapsed.count()*1000 << " " << std::endl;
 }
 
 
@@ -211,7 +211,7 @@ void process_video_omp(const std::string& input_filename, int parallelism) {
     avformat_close_input(&_v_ctx.format_ctx);
 
     std::chrono::duration<double> elapsed = end_time - start_time;
-    std::cout << " Elapsed time for OMP Shared Parallel with "<<SEGMENTS<<"-way parallelism is : " << elapsed.count() << " " << std::endl;
+    std::cout << " Elapsed time for OMP Shared Parallel with "<<SEGMENTS<<"-way parallelism is : " << elapsed.count()*1000 << " " << std::endl;
 }
 
 
@@ -313,7 +313,7 @@ void process_video_distributed(int argc, char** argv) {
 //        print_set(final_key_frame_numbers);
         std::chrono::time_point<std::chrono::high_resolution_clock> end_time = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> elapsed = end_time - start_time;
-        std::cout << " Elapsed time for Distributed MPI is : " << elapsed.count() << " " << std::endl;
+        std::cout << " Elapsed time for Distributed MPI is : " << elapsed.count()*1000 << " " << std::endl;
     }
 
     avcodec_free_context(&v_ctx.codec_ctx);
@@ -396,7 +396,7 @@ void process_video_omp_gpu(const std::string& input_filename, int parallelism) {
     avformat_close_input(&_v_ctx.format_ctx);
 
     std::chrono::duration<double> elapsed = end_time - start_time;
-    std::cout << " Elapsed time for OMP GPU OFFLOAD with "<<SEGMENTS<<"-way parallelism is : " << elapsed.count() << " " << std::endl;
+    std::cout << " Elapsed time for OMP GPU OFFLOAD with "<<SEGMENTS<<"-way parallelism is : " << elapsed.count()*1000 << " " << std::endl;
 }
 
 
@@ -412,10 +412,12 @@ int main(int argc, char* argv[]) {
         process_video_distributed(argc, argv);
     #else
         process_video_naive(input_filename);
+        process_video_omp(input_filename, 4);
         process_video_omp(input_filename, 16);
         process_video_omp(input_filename, 32);
         process_video_omp(input_filename, 64);
-        process_video_omp_gpu(input_filename, 64);
+        process_video_omp(input_filename, 128);
+//        process_video_omp_gpu(input_filename, 64);
     #endif
 
     return 0;
