@@ -322,82 +322,82 @@ void process_video_distributed(int argc, char** argv) {
     MPI_Finalize();
 }
 
-
-void process_video_omp_gpu(const std::string& input_filename, int parallelism) {
-    const int SEGMENTS = 100;
-
-    cout<<endl<<"Starting OMP GPU OFFLOAD"<<endl;
-    std::chrono::time_point<std::chrono::high_resolution_clock> start_time = std::chrono::high_resolution_clock::now();
-
-    VideoContext _v_ctx = get_codec_context_for_video_file(input_filename);
-    int video_stream_index = _v_ctx.video_stream_index;
-
-    // /Users/farhan/Desktop/workspaces/study/ms/semester3/ms_project/scanner/datasets/large_videos/huge_5gb_video.mp4
-
-    // Divide the video into segments
-    int64_t total_duration = _v_ctx.format_ctx->streams[video_stream_index]->duration;
-    int64_t duration_per_part = total_duration / SEGMENTS;
-    int64_t frames_per_part = _v_ctx.format_ctx->streams[video_stream_index]->nb_frames / SEGMENTS;
-    std::set<int64_t> key_frame_numbers;
-
-    # pragma omp target teams distribute parallel for map(to: frames_per_part) map(tofrom: key_frame_numbers) map(to: input_filename)
-    for (int part = 0; part < SEGMENTS; ++part) {
-        VideoContext v_ctx = get_codec_context_for_video_file(input_filename);
-        int video_stream = _v_ctx.video_stream_index;
-        AVFormatContext* format_ctx = v_ctx.format_ctx;
-
-        // Seek to the start of the part
-        int64_t segment_start_time = part * duration_per_part;
-        int64_t end_time = (part == SEGMENTS-1) ? total_duration : ((part + 1) * duration_per_part - 1);
-
-        if(av_seek_frame(format_ctx, video_stream, segment_start_time, AVSEEK_FLAG_BACKWARD) < 0) {
-            std::cerr << "Error seeking to time : " << segment_start_time <<std::endl;
-        }
-
-        int64_t i_frame_count = 0;
-
-        AVPacket* packet = av_packet_alloc();
-        int frames_processed = 0;
-
-        while (av_read_frame(format_ctx, packet) >= 0) {
-            if (packet->stream_index == video_stream) {
-                if(frames_processed > frames_per_part) {
-                    av_packet_unref(packet);
-                    break;
-                }
-
-                if (packet->flags & AV_PKT_FLAG_KEY) {
-                    i_frame_count++;
-
-                    #pragma omp critical
-                    key_frame_numbers.insert(packet->pts);
-                }
-                frames_processed += 1;
-            }
-            av_packet_unref(packet);
-        }
-        avcodec_free_context(&v_ctx.codec_ctx);
-        avformat_close_input(&v_ctx.format_ctx);
-    }
-
-    // Access the modified vector back on the host
-    #pragma omp target update from(key_frame_numbers)
-
-    // Unmap the vector from GPU device memory
-    #pragma omp target exit data map(release: key_frame_numbers)
-
-    std::chrono::time_point<std::chrono::high_resolution_clock> end_time = std::chrono::high_resolution_clock::now();
-    std::cout << " Total Frames: " << _v_ctx.format_ctx->streams[video_stream_index]->nb_frames<<std::endl;
-    std::cout << " Key Frames " << key_frame_numbers.size() << std::endl;
-//    std::cout << "Key Frame Indices: ";
-//    print_set(key_frame_numbers);
-
-    avcodec_free_context(&_v_ctx.codec_ctx);
-    avformat_close_input(&_v_ctx.format_ctx);
-
-    std::chrono::duration<double> elapsed = end_time - start_time;
-    std::cout << " Elapsed time for OMP GPU OFFLOAD with "<<SEGMENTS<<"-way parallelism is : " << elapsed.count()*1000 << " " << std::endl;
-}
+//
+//void process_video_omp_gpu(const std::string& input_filename, int parallelism) {
+//    const int SEGMENTS = 100;
+//
+//    cout<<endl<<"Starting OMP GPU OFFLOAD"<<endl;
+//    std::chrono::time_point<std::chrono::high_resolution_clock> start_time = std::chrono::high_resolution_clock::now();
+//
+//    VideoContext _v_ctx = get_codec_context_for_video_file(input_filename);
+//    int video_stream_index = _v_ctx.video_stream_index;
+//
+//    // /Users/farhan/Desktop/workspaces/study/ms/semester3/ms_project/scanner/datasets/large_videos/huge_5gb_video.mp4
+//
+//    // Divide the video into segments
+//    int64_t total_duration = _v_ctx.format_ctx->streams[video_stream_index]->duration;
+//    int64_t duration_per_part = total_duration / SEGMENTS;
+//    int64_t frames_per_part = _v_ctx.format_ctx->streams[video_stream_index]->nb_frames / SEGMENTS;
+//    std::set<int64_t> key_frame_numbers;
+//
+//    # pragma omp target teams distribute parallel for map(to: frames_per_part) map(tofrom: key_frame_numbers) map(to: input_filename)
+//    for (int part = 0; part < SEGMENTS; ++part) {
+//        VideoContext v_ctx = get_codec_context_for_video_file(input_filename);
+//        int video_stream = _v_ctx.video_stream_index;
+//        AVFormatContext* format_ctx = v_ctx.format_ctx;
+//
+//        // Seek to the start of the part
+//        int64_t segment_start_time = part * duration_per_part;
+//        int64_t end_time = (part == SEGMENTS-1) ? total_duration : ((part + 1) * duration_per_part - 1);
+//
+//        if(av_seek_frame(format_ctx, video_stream, segment_start_time, AVSEEK_FLAG_BACKWARD) < 0) {
+//            std::cerr << "Error seeking to time : " << segment_start_time <<std::endl;
+//        }
+//
+//        int64_t i_frame_count = 0;
+//
+//        AVPacket* packet = av_packet_alloc();
+//        int frames_processed = 0;
+//
+//        while (av_read_frame(format_ctx, packet) >= 0) {
+//            if (packet->stream_index == video_stream) {
+//                if(frames_processed > frames_per_part) {
+//                    av_packet_unref(packet);
+//                    break;
+//                }
+//
+//                if (packet->flags & AV_PKT_FLAG_KEY) {
+//                    i_frame_count++;
+//
+//                    #pragma omp critical
+//                    key_frame_numbers.insert(packet->pts);
+//                }
+//                frames_processed += 1;
+//            }
+//            av_packet_unref(packet);
+//        }
+//        avcodec_free_context(&v_ctx.codec_ctx);
+//        avformat_close_input(&v_ctx.format_ctx);
+//    }
+//
+//    // Access the modified vector back on the host
+//    #pragma omp target update from(key_frame_numbers)
+//
+//    // Unmap the vector from GPU device memory
+//    #pragma omp target exit data map(release: key_frame_numbers)
+//
+//    std::chrono::time_point<std::chrono::high_resolution_clock> end_time = std::chrono::high_resolution_clock::now();
+//    std::cout << " Total Frames: " << _v_ctx.format_ctx->streams[video_stream_index]->nb_frames<<std::endl;
+//    std::cout << " Key Frames " << key_frame_numbers.size() << std::endl;
+////    std::cout << "Key Frame Indices: ";
+////    print_set(key_frame_numbers);
+//
+//    avcodec_free_context(&_v_ctx.codec_ctx);
+//    avformat_close_input(&_v_ctx.format_ctx);
+//
+//    std::chrono::duration<double> elapsed = end_time - start_time;
+//    std::cout << " Elapsed time for OMP GPU OFFLOAD with "<<SEGMENTS<<"-way parallelism is : " << elapsed.count()*1000 << " " << std::endl;
+//}
 
 
 int main(int argc, char* argv[]) {
