@@ -6,6 +6,7 @@
 #include <set>
 #include <omp.h>
 #include <mpi.h>
+#include <vector>
 
 extern "C" {
 #include <libavformat/avformat.h>
